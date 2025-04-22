@@ -116,6 +116,48 @@ def add_delta_silica_regular(df: pd.DataFrame,
     return df2.drop(columns=['time_diff']).reset_index(drop=True)
 
 
+def add_lag_silica_features(df: pd.DataFrame,
+                            time_col: str = 'inicio',
+                            source_col: str = 'conc_silica',
+                            lags: list = [2, 4, 6]) -> pd.DataFrame:
+    """
+    Add lagged silica concentration features at specified hour offsets.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with a datetime column and a silica concentration column.
+    time_col : str
+        Name of the datetime column.
+    source_col : str
+        Name of the concentration column to lag.
+    lags : list of int
+        List of lag offsets in hours (e.g., [2,4,6]).
+
+    Returns:
+    --------
+    pd.DataFrame
+        Copy of df with new columns:
+        source_col + '_lag_<h>h' for each lag in lags.
+    """
+    df2 = df.copy()
+    df2[time_col] = pd.to_datetime(df2[time_col])
+    
+    # For each lag, merge previous value at t-lag into a new column
+    for lag in lags:
+        tmp = df2[[time_col, source_col]].copy()
+        tmp[time_col] = tmp[time_col] + pd.Timedelta(hours=lag)
+        tmp = tmp.rename(columns={source_col: f"{source_col}_lag_{lag}h"})
+        df2 = df2.merge(tmp, on=time_col, how='left')
+    
+    return df2
+
+# Usage example:
+# df_lagged = add_lag_silica_features(df_clean)
+
+
+
+
 # Usage example:
 # df1 = add_time_features(df_clean)
 # df2 = add_ph_features(df1)

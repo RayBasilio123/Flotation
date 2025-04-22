@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
+from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
@@ -13,6 +13,10 @@ from sklearn.metrics import (
     r2_score
 )
 from flot_visualization import plot_residuals
+from sklearn.linear_model import TweedieRegressor
+from xgboost import XGBRegressor
+from lightgbm import LGBMRegressor
+import statsmodels.api as sm
 
 
 def evaluate_models_weights(df: pd.DataFrame,
@@ -160,7 +164,7 @@ def evaluate_models_quantile(df: pd.DataFrame,
     y = df[target]
 
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
+        X, y, test_size=0.2
     )
 
     models = {
@@ -206,6 +210,133 @@ def evaluate_models_quantile(df: pd.DataFrame,
         })
 
     return pd.DataFrame(results)
+
+
+
+def evaluate_tweedie_models(df: pd.DataFrame,
+                            features: list,
+                            target: str,
+                            power: float = 1.5,
+                            test_size: float = 0.2,
+                            show_residuals: bool = False,
+                            random_state=None) -> pd.DataFrame:
+    """
+    Train and evaluate:
+      - GLM Gamma (log link)
+      - Sklearn TweedieRegressor
+      - XGBoost with Tweedie objective
+      - LightGBM with Tweedie objective
+
+    Computes MAE, RMSE, R2, and MAPE.
+    """
+    X = df[features]
+    y = df[target]
+
+    # Train/test split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size
+    )
+
+    results = []
+
+    # 1) Statsmodels GLM Gamma family, log link
+    X_sm = sm.add_constant(X_train)
+    glm = sm.GLM(y_train, X_sm, family=sm.families.Gamma(link=sm.families.links.log()))
+    glm_res = glm.fit()
+    preds_glm = glm_res.predict(sm.add_constant(X_test))
+
+    if show_residuals:
+            plot_residuals(y_test, preds_glm,
+                           actual_name=target,
+                           pred_name=f'pred_GLM_Gamma_Log')
+            
+    mse = mean_squared_error(y_test, preds_glm)
+    results.append({
+        'model': 'GLM_Gamma_Log',
+        'MAE': mean_absolute_error(y_test, preds_glm),
+        'RMSE': np.sqrt(mse),
+        'R2': r2_score(y_test, preds_glm),
+        'MAPE (%)': mean_absolute_percentage_error(y_test, preds_glm) * 100
+    })
+
+    # Common pipeline for sklearn Tweedie
+    tw_pipe = make_pipeline(
+        StandardScaler(),
+        TweedieRegressor(power=power, link='log')
+    )
+    tw_pipe.fit(X_train, y_train)
+    preds_tw = tw_pipe.predict(X_test)
+
+    if show_residuals:
+            plot_residuals(y_test, preds_tw,
+                           actual_name=target,
+                           pred_name=f'pred_Tweedie_Sklearn')
+
+    mse = mean_squared_error(y_test, preds_tw)
+    results.append({
+        'model': f'Sklearn_Tweedie(p={power})',
+        'MAE': mean_absolute_error(y_test, preds_tw),
+        'RMSE': np.sqrt(mse),
+        'R2': r2_score(y_test, preds_tw),
+        'MAPE (%)': mean_absolute_percentage_error(y_test, preds_tw) * 100
+    })
+
+    # XGBoost Tweedie
+    xgb = XGBRegressor(
+        objective='reg:tweedie',
+        tweedie_variance_power=power,
+        n_estimators=500,
+        random_state=random_state,
+        # optional: learning_rate=0.1, max_depth=6
+    )
+    xgb.fit(X_train, y_train)
+    preds_xgb = xgb.predict(X_test)
+
+    if show_residuals:
+            plot_residuals(y_test, preds_xgb,
+                           actual_name=target,
+                           pred_name=f'pred_XGBoost_Tweedie')
+
+    mse = mean_squared_error(y_test, preds_xgb)
+    results.append({
+        'model': f'XGB_Tweedie(p={power})',
+        'MAE': mean_absolute_error(y_test, preds_xgb),
+        'RMSE': np.sqrt(mse),
+        'R2': r2_score(y_test, preds_xgb),
+        'MAPE (%)': mean_absolute_percentage_error(y_test, preds_xgb) * 100
+    })
+
+    # LightGBM Tweedie
+    lgbm = LGBMRegressor(
+        objective='tweedie',
+        tweedie_variance_power=power,
+        n_estimators=500,
+        random_state=random_state,
+        # optional: learning_rate=0.1, num_leaves=31
+    )
+    lgbm.fit(X_train, y_train)
+    preds_lgb = lgbm.predict(X_test)
+
+    if show_residuals:
+            plot_residuals(y_test, preds_xgb,
+                           actual_name=target,
+                           pred_name=f'pred_LightGBM_Tweedie')
+
+    mse = mean_squared_error(y_test, preds_lgb)
+    results.append({
+        'model': f'LGBM_Tweedie(p={power})',
+        'MAE': mean_absolute_error(y_test, preds_lgb),
+        'RMSE': np.sqrt(mse),
+        'R2': r2_score(y_test, preds_lgb),
+        'MAPE (%)': mean_absolute_percentage_error(y_test, preds_lgb) * 100
+    })
+
+    return pd.DataFrame(results)
+
+# Usage example:
+# results_tweedie = evaluate_tweedie_models(df_clean, features, 'conc_silica', power=1.5)
+# display(results_tweedie)
+
 
 # Example usage:
 # results_df = evaluate_models(df_clean, features, 'conc_silica')
