@@ -9,6 +9,32 @@ from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, mean_absolute_percentage_error
 
+
+def add_silica_quantile(df: pd.DataFrame,
+                        source_col: str = 'conc_silica',
+                        new_col: str = 'conc_silica_quantile') -> pd.DataFrame:
+    """
+    Add a feature representing the percentile rank (quantile) of conc_silica within the dataset.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input DataFrame with source_col present.
+    source_col : str
+        Name of the column to compute quantile on (default 'conc_silica').
+    new_col : str
+        Name of the new quantile feature column.
+
+    Returns:
+    --------
+    pd.DataFrame
+        Copy of df with an added column new_col containing values in [0,1].
+    """
+    df2 = df.copy()
+    # Percentile rank between 0 and 1
+    df2[new_col] = df2[source_col].rank(method='average', pct=True)
+    return df2
+
 def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add time-based features: hour of day and day of week.

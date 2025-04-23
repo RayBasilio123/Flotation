@@ -19,6 +19,189 @@ from lightgbm import LGBMRegressor
 import statsmodels.api as sm
 
 
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error
+
+# --- assume these two are already defined ---
+# add_lag_silica_features(df, time_col='inicio', source_col='conc_silica', lags=[2,4,6])
+# add_silica_quantile(df, source_col='conc_silica', new_col='conc_silica_quantile')
+
+def two_stage_quantile_then_conc_percentiles(
+    df: pd.DataFrame,
+    base_features: list,
+    source_col: str = 'conc_silica',
+    test_size: float = 0.2,
+    random_state: int = None,
+    show_residuals: bool = False
+):
+    """
+    Two‐stage pipeline using percentiles (1% bins) instead of deciles:
+      1) Split train/test
+      2) Compute continuous quantile on train
+      3) Map test values into 100 percentile bins based on train cutoffs,
+         assigning values < min → 0.0, > max → 1.0
+      4) Stage 1: predict percentile via RF, report MAE, MAPE, extremes count
+      5) Stage 2: predict conc_silica using base_features + pred_percentile, report MAE & MAPE
+    """
+    # 1) Prepare data and split
+    df2 = df.dropna(subset=base_features + [source_col]).reset_index(drop=True)
+    train_idx, test_idx = train_test_split(df2.index, test_size=test_size, random_state=random_state)
+    train = df2.loc[train_idx].copy()
+    test  = df2.loc[test_idx].copy()
+
+    # 2) Compute continuous quantile on train
+    train['conc_silica_quantile'] = train[source_col].rank(pct=True)
+
+    # 3) Percentile cutpoints (0%,1%,2%,...,100%)
+    cutoffs = train[source_col].quantile(np.linspace(0, 1, 101)).values
+    labels  = np.linspace(0.01, 1.00, 100)  # percentiles 1%..100%
+    test['conc_silica_quantile'] = pd.cut(
+        test[source_col],
+        bins=cutoffs,
+        labels=labels,
+        include_lowest=True
+    ).astype(float)
+    # assign extremes
+    test.loc[test[source_col] < cutoffs[0], 'conc_silica_quantile'] = 0.0
+    test.loc[test[source_col] > cutoffs[-1], 'conc_silica_quantile'] = 1.0
+
+    # --- Stage 1: Percentile model ---
+    quant_pipe = Pipeline([
+        ('scaler', StandardScaler()),
+        ('rf', RandomForestRegressor(n_estimators=200, random_state=random_state))
+    ])
+    quant_pipe.fit(train[base_features], train['conc_silica_quantile'])
+    yq_pred = quant_pipe.predict(test[base_features])
+
+    # metrics
+    q_mae = mean_absolute_error(test['conc_silica_quantile'], yq_pred)
+    q_mape = mean_absolute_percentage_error(test['conc_silica_quantile'], yq_pred) * 100
+    extreme_count = ((test['conc_silica_quantile'] == 0.0) | (test['conc_silica_quantile'] == 1.0)).sum()
+    total_count = len(test)
+    print(f"Stage 1 (Percentile) → MAE: {q_mae:.4f}, MAPE: {q_mape:.2f}%, extremes: {extreme_count}/{total_count}")
+
+    # append predicted percentile
+    train['pred_percentile'] = quant_pipe.predict(train[base_features])
+    test['pred_percentile']  = yq_pred
+
+    # --- Stage 2: Silica model ---
+    final_feats = base_features + ['pred_percentile']
+    final_pipe = Pipeline([
+        ('scaler', StandardScaler()),
+        ('rf', RandomForestRegressor(n_estimators=200, random_state=random_state))
+    ])
+    final_pipe.fit(train[final_feats], train[source_col])
+    yc_pred = final_pipe.predict(test[final_feats])
+
+    c_mae = mean_absolute_error(test[source_col], yc_pred)
+    c_mape = mean_absolute_percentage_error(test[source_col], yc_pred) * 100
+    print(f"Stage 2 (Silica) → MAE: {c_mae:.4f}, MAPE: {c_mape:.2f}%")
+
+    if show_residuals:
+        plot_residuals(test[source_col], yc_pred,
+                           actual_name=source_col,
+                           pred_name=f'pred')
+
+    return {
+        'percentile_model': quant_pipe,
+        'final_model':      final_pipe,
+        'test_df':          test,
+        'percentile_metrics': {'MAE': q_mae, 'MAPE': q_mape, 'extremes': extreme_count},
+        'silica_metrics':     {'MAE': c_mae,  'MAPE': c_mape}
+    }
+
+
+def two_stage_quantile_then_conc(
+    df: pd.DataFrame,
+    base_features: list,
+    source_col: str = 'conc_silica',
+    test_size: float = 0.2,
+    random_state: int = None
+):
+    """
+    Two‐stage pipeline without lag features and without quantile leakage:
+      1) Split train/test
+      2) Compute true quantile on train only
+      3) Map test values to train quantile bins (assign extremes to 0 or 1)
+      4) Stage 1: fit quantile model, report MAE, MAPE, and count of extremes
+      5) Stage 2: fit silica model using base + pred_quantile, report MAE & MAPE
+    """
+    # 1) Drop NA in required columns and split
+    df2 = df.dropna(subset=base_features + [source_col]).reset_index(drop=True)
+    train_idx, test_idx = train_test_split(df2.index, test_size=test_size, random_state=random_state, shuffle=True)
+    train = df2.loc[train_idx].copy()
+    test  = df2.loc[test_idx].copy()
+
+    # 2) Compute train‐only continuous quantile (0–1)
+    train['conc_silica_quantile'] = train[source_col].rank(pct=True)
+
+    # 3) Derive decile cutpoints on train and map test into them
+    cutoffs = train[source_col].quantile(np.linspace(0, 1, 11)).values
+    labels  = np.linspace(0.1, 1.0, 10)
+    test['conc_silica_quantile'] = pd.cut(
+        test[source_col],
+        bins=cutoffs,
+        labels=labels,
+        include_lowest=True
+    ).astype(float)
+    # Assign extremes
+    test.loc[test[source_col] < cutoffs[0], 'conc_silica_quantile'] = 0.0
+    test.loc[test[source_col] > cutoffs[-1], 'conc_silica_quantile'] = 1.0
+
+    # --- Stage 1: Quantile model ---
+    quant_pipe = Pipeline([
+        ('scaler', StandardScaler()),
+        ('rf', RandomForestRegressor(n_estimators=200, random_state=random_state))
+    ])
+    quant_pipe.fit(train[base_features], train['conc_silica_quantile'])
+    yq_pred = quant_pipe.predict(test[base_features])
+
+    # Metrics
+    q_mae  = mean_absolute_error(test['conc_silica_quantile'], yq_pred)
+    q_mape = mean_absolute_percentage_error(test['conc_silica_quantile'], yq_pred) * 100
+    # Count extremes
+    extreme_mask  = (test['conc_silica_quantile'] == 0.0) | (test['conc_silica_quantile'] == 1.0)
+    extreme_count = int(extreme_mask.sum())
+    total_count   = len(test)
+    print(
+        f"Stage 1 (Quantile) → "
+        f"MAE: {q_mae:.4f}, "
+        f"MAPE: {q_mape:.2f}%, "
+        f"extremes: {extreme_count}/{total_count}"
+    )
+
+    # 4) Append predicted quantile
+    train['pred_quantile'] = quant_pipe.predict(train[base_features])
+    test['pred_quantile']  = yq_pred
+
+    # --- Stage 2: Silica model ---
+    final_feats = base_features + ['pred_quantile']
+    final_pipe = Pipeline([
+        ('scaler', StandardScaler()),
+        ('rf', RandomForestRegressor(n_estimators=200, random_state=random_state))
+    ])
+    final_pipe.fit(train[final_feats], train[source_col])
+    yc_pred = final_pipe.predict(test[final_feats])
+
+    # Metrics
+    c_mae  = mean_absolute_error(test[source_col], yc_pred)
+    c_mape = mean_absolute_percentage_error(test[source_col], yc_pred) * 100
+    print(f"Stage 2 (Silica) → MAE: {c_mae:.4f}, MAPE: {c_mape:.2f}%")
+
+    return {
+        'quantile_model': quant_pipe,
+        'final_model':   final_pipe,
+        'test_df':       test,
+        'quantile_metrics': {'MAE': q_mae, 'MAPE': q_mape, 'extremes': extreme_count},
+        'silica_metrics':   {'MAE': c_mae,  'MAPE': c_mape}
+    }
+
+
 def evaluate_models_weights(df: pd.DataFrame,
                             features: list,
                             target: str,
