@@ -73,7 +73,7 @@ def two_stage_quantile_then_conc_percentiles(
     # --- Stage 1: Percentile model ---
     quant_pipe = Pipeline([
         ('scaler', StandardScaler()),
-        ('rf', RandomForestRegressor(n_estimators=200, random_state=random_state))
+        ('rf', RandomForestRegressor(n_estimators=200, max_depth=4, random_state=random_state))
     ])
     quant_pipe.fit(train[base_features], train['conc_silica_quantile'])
     yq_pred = quant_pipe.predict(test[base_features])
@@ -93,7 +93,7 @@ def two_stage_quantile_then_conc_percentiles(
     final_feats = base_features + ['pred_percentile']
     final_pipe = Pipeline([
         ('scaler', StandardScaler()),
-        ('rf', RandomForestRegressor(n_estimators=200, random_state=random_state))
+        ('rf', RandomForestRegressor(n_estimators=200, max_depth=4, random_state=random_state))
     ])
     final_pipe.fit(train[final_feats], train[source_col])
     yc_pred = final_pipe.predict(test[final_feats])

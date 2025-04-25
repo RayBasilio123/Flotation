@@ -138,6 +138,35 @@ def filter_by_ph(df: pd.DataFrame,
     # Apply mask and reset index
     return df_filtered.loc[mask].reset_index(drop=True)
 
+def filter_by_silica(df: pd.DataFrame,
+                 silica_cols: list = ['conc_silica'],
+                 threshold: float = 12) -> pd.DataFrame:
+    """
+    Remove any row where either of the specified pH columns is below the threshold.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input DataFrame.
+    ph_cols : list of str
+        Column names for pH measurements to filter on.
+    threshold : float
+        Minimum acceptable pH value.
+
+    Returns:
+    --------
+    pd.DataFrame
+        A new DataFrame containing only rows where all specified pH columns
+        are >= threshold.
+    """
+    df_filtered = df.copy()
+    # Build a mask that is True only if all pH columns meet or exceed the threshold
+    mask = pd.Series(True, index=df_filtered.index)
+    for col in silica_cols:
+        mask &= df_filtered[col] <= threshold
+    # Apply mask and reset index
+    return df_filtered.loc[mask].reset_index(drop=True)
+
 def filter_by_flow(df: pd.DataFrame,
                    flow_col: str = 'vazao_alimentacao_flotacao',
                    threshold: float = 470.0) -> pd.DataFrame:
