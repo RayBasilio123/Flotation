@@ -1,0 +1,6 @@
+Algoritmo: dbscan
+Período: ago_set
+Parâmetros:
+  eps: 2.5
+  min_samples: 30
+Número de clusters detectados: 3

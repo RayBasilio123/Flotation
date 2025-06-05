@@ -1,0 +1,5 @@
+Algoritmo: kmeans
+Período: ago_set
+Parâmetros:
+  k: 4
+Número de clusters detectados: 4
