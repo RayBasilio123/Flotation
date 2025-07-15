@@ -139,11 +139,11 @@ if __name__ == '__main__':
     print(df.columns)
     X_train, X_test, y_train, y_test = split_features_target(df, 'conc_silica')
     threshold = get_threshold(y_train)
-    weights = compute_sample_weight(y_train, threshold)
+    weights = compute_sample_weight(y_train, threshold, weight_high=1)
     X_tr, X_val, y_tr, y_val, w_tr, w_val = train_test_split(
         X_train, y_train, weights, test_size=0.2, random_state=42
     )
-    params = {'objective':'quantile','metric':'rmse','verbosity':-1,'boosting_type':'gbdt', 'alpha':0.95}
+    params = {'objective':'regression','metric':'rmse','verbosity':-1,'boosting_type':'gbdt'}
     model = train_lightgbm(X_tr, y_tr, sample_weight=w_tr, params=params,
                            num_boost_round=1000, early_stopping_rounds=50,
                            X_val=X_val, y_val=y_val, val_weight=w_val)
